@@ -1,0 +1,18 @@
+name: deploy-api
+triggers:
+  - manual
+steps:
+  - name: build
+    run: echo "building"
+  - name: test
+    run: echo "testing"
+    needs: [build]
+  - name: lint
+    run: echo "linting"
+    needs: [build]
+  - name: deploy
+    run: echo "deploying"
+    needs: [test, lint]
+maxParallel: 3
+stopOnFail: true
+retry: 2

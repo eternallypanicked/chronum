@@ -1,0 +1,45 @@
+/cmd/flowctl            # CLI entrypoint
+/internal/
+  core/                 # orchestration kernel (interfaces + engine)
+    engine.go
+    dag.go
+    planner.go
+    run_context.go
+    policies.go
+  dsl/                  # flow.yaml parser & schema
+    parser.go
+    model.go
+    validate.go
+  exec/                 # executors (local shell, http, python, node, docker, k8s…)
+    executor.go         # interface
+    shell/
+      shell_exec.go
+    http/
+      http_exec.go
+  trigger/              # cron/interval/webhook/git triggers
+    trigger.go
+    cron/
+      cron_trigger.go
+  store/                # state stores (sqlite v0; pg/remote v1)
+    store.go            # interface
+    sqlite/
+      sqlite_store.go
+      schema.sql
+  obs/                  # observability (events, logs, metrics)
+    events.go           # event types
+    bus.go              # EventBus interface + inproc impl
+    logging.go          # structured logs
+    exporters/          # otlp/prom/webhook/email
+      otlp_exporter.go
+      webhook_exporter.go
+  notify/               # notifications (slack/email/pagerduty)
+    notifier.go
+    slack/
+      slack_notifier.go
+  api/                  # local HTTP/WebSocket for dashboard
+    server.go
+    ws.go
+  ui/                   # embedded dist/ for Vue app (serve from api/)
+    dist/...
+/plugins/               # optional go-plugin RPC stubs (v1)
+/test/      
