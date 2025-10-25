@@ -1,11 +1,15 @@
 package dag
 
-import "fmt"
+import (
+	"chronum/parser/types"
+	"fmt"
+)
 
 type Node struct {
 	ID           string
 	Dependencies []*Node
 	Dependents	 []*Node
+	Step         *types.StepDefinition
 }
 
 type DAG struct {

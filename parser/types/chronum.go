@@ -5,6 +5,7 @@ type StepDefinition struct {
     Run   string            `yaml:"run" json:"run"`
     Needs []string          `yaml:"needs,omitempty" json:"needs,omitempty"`
     Env   map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	Executor string            `yaml:"executor,omitempty" json:"executor,omitempty"`
 }
 
 type ChronumDefinition struct {

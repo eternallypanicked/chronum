@@ -43,9 +43,11 @@ func main() {
 
     // --- 2. Build DAG from steps ---
     d := dag.New()
-    for _, step := range flow.Steps {
-        d.AddNode(step.Name)
-    }
+    for i := range flow.Steps {
+		step := &flow.Steps[i]
+		node := d.AddNode(step.Name)
+		node.Step = step
+	}
 
     deps := make(map[string][]string)
     for _, step := range flow.Steps {

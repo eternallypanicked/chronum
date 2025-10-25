@@ -17,22 +17,20 @@ type ShellExecutor struct{}
 type PythonExecutor struct{}
 
 func (s *ShellExecutor) Execute(node *dag.Node) error {
-	fmt.Printf("→ [shell] executing step: %s\n", node.ID)
+	step := node.Step
+    fmt.Printf("→ [shell] executing step: %s\n", step.Name)
 
-	// TODO: In future, node should hold a reference to its StepDefinition
-	command := fmt.Sprintf("echo Running %s", node.ID)
+    var cmd *exec.Cmd
+    switch runtime.GOOS {
+    case "windows":
+        cmd = exec.Command("cmd", "/C", step.Run)
+    default:
+        cmd = exec.Command("sh", "-c", step.Run)
+    }
 
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("cmd", "/C", command)
-	default:
-		cmd = exec.Command("sh", "-c", command)
-	}
-
-	output, err := cmd.CombinedOutput()
-	fmt.Printf("%s\n", string(output))
-	return err
+    output, err := cmd.CombinedOutput()
+    fmt.Printf("%s\n", string(output))
+    return err
 }
 
 func (p *PythonExecutor) Execute(node *dag.Node) error {

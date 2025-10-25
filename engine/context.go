@@ -24,6 +24,10 @@ func NewRunContext(env map[string]string) *RunContext {
     }
 }
 
+func (r *RunContext) IsCancelled() bool {
+    return r.Ctx.Err() != nil
+}
+
 // for now just a timestamp-based run ID
 func generateRunID() string {
     return time.Now().Format("20060102T150405")

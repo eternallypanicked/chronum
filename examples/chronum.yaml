@@ -13,6 +13,12 @@ steps:
   - name: deploy
     run: echo "deploying"
     needs: [test, lint]
+  - name: preprocess
+    executor: python
+    run: scripts/preprocess.py
+  - name: deployed
+    executor: shell
+    run: ./deploy.sh
 maxParallel: 3
 stopOnFail: true
 retry: 2

@@ -32,7 +32,7 @@ func (r *Runner) RunNode(node *dag.Node) StepResult {
     return StepResult{ID: id, Status: StepSuccess}
 }
 
-func (r *Runner) RunNodeWithRetry(node *dag.Node, retries int) StepResult {
+func (r *Runner) RunNodeWithRetry(node *dag.Node, ex Executor, retries int) StepResult {
     id := node.ID
     r.State.Set(id, StepRunning)
     fmt.Printf("[%s] Running...\n", id)

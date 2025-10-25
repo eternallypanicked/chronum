@@ -1,8 +1,10 @@
 package engine
 
 import (
+	
 	"chronum/parser/dag"
 	"fmt"
+	"chronum/parser/types"
 	"sync"
 )
 
@@ -114,7 +116,8 @@ func (e *Engine) RunParallel(graph *dag.DAG) error {
 	return nil
 }
 
-func (e *Engine) RunParallelWithLimit(graph *dag.DAG, maxParallel int, stopOnFail bool) error {
+func (e *Engine) RunParallelWithLimit(graph *dag.DAG, flow *types.ChronumDefinition) error {
+    maxParallel := flow.MaxParallel
     if maxParallel < 1 {
         maxParallel = 1
     }
@@ -125,16 +128,11 @@ func (e *Engine) RunParallelWithLimit(graph *dag.DAG, maxParallel int, stopOnFai
     inProgress := make(map[string]bool)
 
     state := NewStateManager()
-    ctx := NewRunContext(map[string]string{"RUN_MODE": "parallel"})
+    ctx := NewRunContext(nil)
     runner := NewRunner(state, ctx, e.executors["shell"])
 
-    // find roots
-    ready := []*dag.Node{}
-    for _, n := range graph.Nodes {
-        if len(n.Dependencies) == 0 {
-            ready = append(ready, n)
-        }
-    }
+    fmt.Printf("\n🚀 Running %s (maxParallel=%d, stopOnFail=%v, retry=%d)\n",
+        flow.Name, flow.MaxParallel, flow.StopOnFail, flow.DefaultRetry)
 
     var runNode func(*dag.Node)
     runNode = func(node *dag.Node) {
@@ -146,20 +144,42 @@ func (e *Engine) RunParallelWithLimit(graph *dag.DAG, maxParallel int, stopOnFai
         inProgress[node.ID] = true
         mu.Unlock()
 
-        sem <- struct{}{} // acquire slot
+        sem <- struct{}{}
         wg.Add(1)
+
         go func() {
             defer func() {
-                <-sem // release slot
+                <-sem
                 wg.Done()
             }()
 
-            res := runner.RunNode(node)
-            if res.Status == StepFailed && stopOnFail {
+            if ctx.IsCancelled() {
+                return
+            }
+
+            step := node.Step
+            execType := step.Executor
+            if execType == "" {
+                execType = "shell"
+            }
+
+            ex, ok := e.executors[execType]
+            if !ok {
+                fmt.Printf("⚠️  No executor registered for '%s', using shell\n", execType)
+                ex = e.executors["shell"]
+            }
+
+            // 🔥 Run with retries
+            res := runner.RunNodeWithRetry(node, ex, flow.DefaultRetry)
+
+            // 🔥 Stop all if configured and a failure occurred
+            if res.Status == StepFailed && flow.StopOnFail {
+                fmt.Printf("❌ Step '%s' failed — stopping all further execution.\n", node.ID)
                 ctx.Cancel()
                 return
             }
 
+            // 🔥 Launch dependents when all dependencies are done
             for _, dep := range node.Dependents {
                 if allDepsSatisfied(dep, state) {
                     runNode(dep)
@@ -168,14 +188,18 @@ func (e *Engine) RunParallelWithLimit(graph *dag.DAG, maxParallel int, stopOnFai
         }()
     }
 
-    for _, node := range ready {
-        runNode(node)
+    // Start all root nodes (no dependencies)
+    for _, node := range graph.Nodes {
+        if len(node.Dependencies) == 0 {
+            runNode(node)
+        }
     }
 
     wg.Wait()
-    fmt.Println("✅ Parallel run complete (limited concurrency)")
+    fmt.Println("✅ Flow complete.")
     return nil
 }
+
 
 
 // helper: check if all dependencies succeeded
