@@ -1,8 +1,10 @@
 package engine
 
 import (
-    "chronum/parser/dag"
-    "fmt"
+	"chronum/parser/dag"
+	"fmt"
+	"math/rand"
+	"time"
 )
 
 type Runner struct {
@@ -32,25 +34,55 @@ func (r *Runner) RunNode(node *dag.Node) StepResult {
     return StepResult{ID: id, Status: StepSuccess}
 }
 
+// RunNodeWithRetry executes a single DAG node with retry policy, exponential backoff,
+// and optional jitter to avoid retry storms.
 func (r *Runner) RunNodeWithRetry(node *dag.Node, ex Executor, retries int) StepResult {
-    id := node.ID
-    r.State.Set(id, StepRunning)
-    fmt.Printf("[%s] Running...\n", id)
+	
+	id := node.ID
+	r.State.Set(id, StepRunning)
+	fmt.Printf("[%s] Running...\n", id)
 
-    var lastErr error
-    for attempt := 1; attempt <= retries+1; attempt++ {
-        err := r.Exec.Execute(node)
-        if err == nil {
-            r.State.Set(id, StepSuccess)
-            fmt.Printf("[%s] complete\n", id)
-            return StepResult{ID: id, Status: StepSuccess}
-        }
+	var lastErr error
+	delay := time.Second // initial backoff duration
 
-        fmt.Printf("[%s] failed (attempt %d/%d): %v\n", id, attempt, retries+1, err)
-        lastErr = err
-    }
+	for attempt := 1; attempt <= retries+1; attempt++ {
+		// respect context cancellation
+		if r.Ctx.IsCancelled() {
+			r.State.Set(id, StepFailed)
+			fmt.Printf("[%s] cancelled before attempt %d\n", id, attempt)
+			return StepResult{ID: id, Status: StepFailed, Error: fmt.Errorf("cancelled")}
+		}
 
-    r.State.Set(id, StepFailed)
-    return StepResult{ID: id, Status: StepFailed, Error: lastErr}
+		err := ex.Execute(node)
+		if err == nil {
+			r.State.Set(id, StepSuccess)
+			fmt.Printf("[%s] complete\n", id)
+			return StepResult{ID: id, Status: StepSuccess}
+		}
+
+		// record the failure
+		lastErr = err
+		fmt.Printf("[%s] failed (attempt %d/%d): %v\n", id, attempt, retries+1, err)
+
+		// if this was the final attempt, break
+		if attempt == retries+1 {
+			break
+		}
+
+		// --- exponential backoff with jitter ---
+		// random jitter between 0–250 ms
+		jitter := time.Duration(rand.Intn(250)) * time.Millisecond
+		fmt.Printf("[%s] retrying in %s (±%s jitter)\n", id, delay, jitter)
+
+		time.Sleep(delay + jitter)
+		delay *= 2 
+		if delay > 30*time.Second {
+			delay = 30 * time.Second 
+		}
+	}
+
+	r.State.Set(id, StepFailed)
+	fmt.Printf("[%s] failed after %d attempts\n", id, retries+1)
+	return StepResult{ID: id, Status: StepFailed, Error: lastErr}
 }
 

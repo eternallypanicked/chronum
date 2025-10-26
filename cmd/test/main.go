@@ -25,7 +25,7 @@ func main() {
         panic(err)
     }
 
-    fmt.Printf("✅ Parsed Chronum: %s\n", flow.Name)
+    fmt.Printf("Parsed Chronum: %s\n", flow.Name)
     for _, s := range flow.Steps {
         fmt.Printf(" - %s (run: %s, needs: %v)\n", s.Name, s.Run, s.Needs)
     }
@@ -51,10 +51,11 @@ func main() {
     e.RegisterExecutor("python", &engine.PythonExecutor{})
 
     // --- 4. Run DAG ---
-    fmt.Println("🚀 Running in parallel mode...")
+    fmt.Println("Running in parallel mode...")
     if err := e.RunParallelWithLimit(d, flow); err != nil {
-        panic(err)
-    }
+		fmt.Printf("\nFlow ended with errors: %v\n", err)
+		os.Exit(1) // clean exit, proper nonzero status
+	}
 
-    fmt.Println("\n🎉 Chronum run complete!")
+    fmt.Println("\nChronum run complete!")
 }

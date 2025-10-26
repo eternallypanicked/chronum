@@ -111,7 +111,7 @@ func (e *Engine) RunParallel(graph *dag.DAG) error {
 	}
 
 	wg.Wait()
-	fmt.Println("✅ Parallel run complete")
+	fmt.Println("Parallel run complete")
 	return nil
 }
 
@@ -131,7 +131,7 @@ func (e *Engine) RunParallelWithLimit(graph *dag.DAG, flow *types.ChronumDefinit
 	ctx := NewRunContext(nil)
 	runner := NewRunner(state, ctx, e.executors["shell"])
 
-	fmt.Printf("\n🚀 Running %s (maxParallel=%d, stopOnFail=%v, retry=%d)\n",
+	fmt.Printf("\nRunning %s (maxParallel=%d, stopOnFail=%v, retry=%d)\n",
 		flow.Name, maxParallel, flow.StopOnFail, flow.DefaultRetry)
 
 	var runNode func(*dag.Node)
@@ -165,29 +165,29 @@ func (e *Engine) RunParallelWithLimit(graph *dag.DAG, flow *types.ChronumDefinit
 
 			ex, ok := e.executors[execType]
 			if !ok {
-				fmt.Printf("⚠️  No executor registered for '%s', using shell\n", execType)
+				fmt.Printf("No executor registered for '%s', using shell\n", execType)
 				ex = e.executors["shell"]
 			}
 
-			// 🔥 Execute with retry logic
+			// Execute with retry logic
 			res := runner.RunNodeWithRetry(node, ex, flow.DefaultRetry)
 
-			// 🔥 Record step result
+			// Record step result
 			if res.Status == StepFailed {
 				state.Set(node.ID, StepFailed)
-				fmt.Printf("❌ Step '%s' failed.\n", node.ID)
+				fmt.Printf("Step '%s' failed.\n", node.ID)
 			} else {
 				state.Set(node.ID, StepSuccess)
 			}
 
-			// 🔥 Stop all if configured and a failure occurred
+			// Stop all if configured and a failure occurred
 			if res.Status == StepFailed && flow.StopOnFail {
-				fmt.Printf("🚨 Stop-on-fail active — cancelling remaining steps.\n")
+				fmt.Printf("Stop-on-fail active — cancelling remaining steps.\n")
 				ctx.Cancel()
 				return
 			}
 
-			// 🔥 Launch dependents if all dependencies succeeded
+			// Launch dependents if all dependencies succeeded
 			for _, dep := range node.Dependents {
 				if ctx.IsCancelled() {
 					return
@@ -207,9 +207,9 @@ func (e *Engine) RunParallelWithLimit(graph *dag.DAG, flow *types.ChronumDefinit
 	}
 
 	wg.Wait()
-	fmt.Println("✅ Flow complete.")
+	fmt.Println("Flow complete.")
 
-	// 🔥 Detect any failed steps for overall result
+	// Detect any failed steps for overall result
 	for id, st := range state.Snapshot() {
 		if st == StepFailed {
 			return fmt.Errorf("flow completed with failed step(s), e.g. %s", id)
