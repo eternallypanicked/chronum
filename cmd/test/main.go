@@ -6,88 +6,54 @@ import (
 
     "chronum/parser"
     "chronum/parser/types"
-    _ "chronum/parser/yaml" // side-effect import for YAML parser
-
+    _ "chronum/parser/yaml"
     "chronum/parser/dag"
     "chronum/engine"
 )
 
 func main() {
-    // --- 1. Load and parse YAML ---
+    // --- 1. Load YAML ---
     content, err := os.ReadFile("examples/chronum.yaml")
     if err != nil {
         panic(fmt.Errorf("failed to read yaml: %w", err))
     }
 
-    src := types.ChronumSource{
-        Type:    "yaml",
-        Content: content,
-    }
-
-    p, err := parser.Get(src.Type)
-    if err != nil {
-        panic(fmt.Errorf("parser not found: %w", err))
-    }
-
+    src := types.ChronumSource{Type: "yaml", Content: content}
+    p, _ := parser.Get(src.Type)
     flow, err := p.Parse(src)
     if err != nil {
-        panic(fmt.Errorf("parse error: %w", err))
+        panic(err)
     }
 
-    fmt.Println("✅ Parsed Chronum:")
-    fmt.Printf("Name: %s\n", flow.Name)
-    fmt.Println("Steps:")
+    fmt.Printf("✅ Parsed Chronum: %s\n", flow.Name)
     for _, s := range flow.Steps {
         fmt.Printf(" - %s (run: %s, needs: %v)\n", s.Name, s.Run, s.Needs)
     }
 
-    // --- 2. Build DAG from steps ---
+    // --- 2. Build DAG ---
     d := dag.New()
     for i := range flow.Steps {
-		step := &flow.Steps[i]
-		node := d.AddNode(step.Name)
-		node.Step = step
-	}
-
+        step := &flow.Steps[i]
+        node := d.AddNode(step.Name)
+        node.Step = step
+    }
     deps := make(map[string][]string)
     for _, step := range flow.Steps {
         deps[step.Name] = step.Needs
     }
-
     if err := d.LinkDependencies(deps); err != nil {
-        panic(fmt.Errorf("failed to link dependencies: %w", err))
+        panic(fmt.Errorf("link dependencies: %w", err))
     }
 
-    // --- 3. Create engine components ---
-    ctx := engine.NewRunContext(map[string]string{"FLOW_NAME": flow.Name})
-    state := engine.NewStateManager()
-    shellExec := &engine.ShellExecutor{}
-    runner := engine.NewRunner(state, ctx, shellExec)
+    // --- 3. Create Engine ---
+    e := engine.New()
+    e.RegisterExecutor("shell", &engine.ShellExecutor{})
+    e.RegisterExecutor("python", &engine.PythonExecutor{})
 
-	// Parallel Execution
-	e := engine.New()
-	e.RegisterExecutor("shell", &engine.ShellExecutor{})
-
-	fmt.Println("🚀 Running in parallel mode...")
-	if err := e.RunParallel(d); err != nil {
-		panic(err)
-	}
-
-    // --- 4. Execute DAG ---
-    fmt.Println("\n🚀 Starting Chronum run...")
-    sorted, err := d.TopologicalSort()
-    if err != nil {
-        panic(fmt.Errorf("topological sort failed: %w", err))
-    }
-
-    for _, node := range sorted {
-        runner.RunNode(node)
-    }
-
-    // --- 5. Print final states ---
-    fmt.Println("\n📊 Final step states:")
-    for id, status := range state.Snapshot() {
-        fmt.Printf(" - %s: %s\n", id, status)
+    // --- 4. Run DAG ---
+    fmt.Println("🚀 Running in parallel mode...")
+    if err := e.RunParallelWithLimit(d, flow); err != nil {
+        panic(err)
     }
 
     fmt.Println("\n🎉 Chronum run complete!")

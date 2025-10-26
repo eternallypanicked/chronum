@@ -1,10 +1,9 @@
 package engine
 
 import (
-	
 	"chronum/parser/dag"
-	"fmt"
 	"chronum/parser/types"
+	"fmt"
 	"sync"
 )
 
@@ -117,95 +116,112 @@ func (e *Engine) RunParallel(graph *dag.DAG) error {
 }
 
 func (e *Engine) RunParallelWithLimit(graph *dag.DAG, flow *types.ChronumDefinition) error {
-    maxParallel := flow.MaxParallel
-    if maxParallel < 1 {
-        maxParallel = 1
-    }
 
-    sem := make(chan struct{}, maxParallel)
-    var mu sync.Mutex
-    wg := &sync.WaitGroup{}
-    inProgress := make(map[string]bool)
+	maxParallel := flow.MaxParallel
+	if maxParallel < 1 {
+		maxParallel = 1
+	}
 
-    state := NewStateManager()
-    ctx := NewRunContext(nil)
-    runner := NewRunner(state, ctx, e.executors["shell"])
+	sem := make(chan struct{}, maxParallel)
+	var mu sync.Mutex
+	wg := &sync.WaitGroup{}
+	inProgress := make(map[string]bool)
 
-    fmt.Printf("\n🚀 Running %s (maxParallel=%d, stopOnFail=%v, retry=%d)\n",
-        flow.Name, flow.MaxParallel, flow.StopOnFail, flow.DefaultRetry)
+	state := NewStateManager()
+	ctx := NewRunContext(nil)
+	runner := NewRunner(state, ctx, e.executors["shell"])
 
-    var runNode func(*dag.Node)
-    runNode = func(node *dag.Node) {
-        mu.Lock()
-        if inProgress[node.ID] {
-            mu.Unlock()
-            return
-        }
-        inProgress[node.ID] = true
-        mu.Unlock()
+	fmt.Printf("\n🚀 Running %s (maxParallel=%d, stopOnFail=%v, retry=%d)\n",
+		flow.Name, maxParallel, flow.StopOnFail, flow.DefaultRetry)
 
-        sem <- struct{}{}
-        wg.Add(1)
+	var runNode func(*dag.Node)
+	runNode = func(node *dag.Node) {
+		mu.Lock()
+		if inProgress[node.ID] {
+			mu.Unlock()
+			return
+		}
+		inProgress[node.ID] = true
+		mu.Unlock()
 
-        go func() {
-            defer func() {
-                <-sem
-                wg.Done()
-            }()
+		sem <- struct{}{}
+		wg.Add(1)
 
-            if ctx.IsCancelled() {
-                return
-            }
+		go func() {
+			defer func() {
+				<-sem
+				wg.Done()
+			}()
 
-            step := node.Step
-            execType := step.Executor
-            if execType == "" {
-                execType = "shell"
-            }
+			if ctx.IsCancelled() {
+				return
+			}
 
-            ex, ok := e.executors[execType]
-            if !ok {
-                fmt.Printf("⚠️  No executor registered for '%s', using shell\n", execType)
-                ex = e.executors["shell"]
-            }
+			step := node.Step
+			execType := step.Executor
+			if execType == "" {
+				execType = "shell"
+			}
 
-            // 🔥 Run with retries
-            res := runner.RunNodeWithRetry(node, ex, flow.DefaultRetry)
+			ex, ok := e.executors[execType]
+			if !ok {
+				fmt.Printf("⚠️  No executor registered for '%s', using shell\n", execType)
+				ex = e.executors["shell"]
+			}
 
-            // 🔥 Stop all if configured and a failure occurred
-            if res.Status == StepFailed && flow.StopOnFail {
-                fmt.Printf("❌ Step '%s' failed — stopping all further execution.\n", node.ID)
-                ctx.Cancel()
-                return
-            }
+			// 🔥 Execute with retry logic
+			res := runner.RunNodeWithRetry(node, ex, flow.DefaultRetry)
 
-            // 🔥 Launch dependents when all dependencies are done
-            for _, dep := range node.Dependents {
-                if allDepsSatisfied(dep, state) {
-                    runNode(dep)
-                }
-            }
-        }()
-    }
+			// 🔥 Record step result
+			if res.Status == StepFailed {
+				state.Set(node.ID, StepFailed)
+				fmt.Printf("❌ Step '%s' failed.\n", node.ID)
+			} else {
+				state.Set(node.ID, StepSuccess)
+			}
 
-    // Start all root nodes (no dependencies)
-    for _, node := range graph.Nodes {
-        if len(node.Dependencies) == 0 {
-            runNode(node)
-        }
-    }
+			// 🔥 Stop all if configured and a failure occurred
+			if res.Status == StepFailed && flow.StopOnFail {
+				fmt.Printf("🚨 Stop-on-fail active — cancelling remaining steps.\n")
+				ctx.Cancel()
+				return
+			}
 
-    wg.Wait()
-    fmt.Println("✅ Flow complete.")
-    return nil
+			// 🔥 Launch dependents if all dependencies succeeded
+			for _, dep := range node.Dependents {
+				if ctx.IsCancelled() {
+					return
+				}
+				if allDepsSatisfied(dep, state) {
+					runNode(dep)
+				}
+			}
+		}()
+	}
+
+	// --- Start all root nodes (no dependencies) ---
+	for _, node := range graph.Nodes {
+		if len(node.Dependencies) == 0 {
+			runNode(node)
+		}
+	}
+
+	wg.Wait()
+	fmt.Println("✅ Flow complete.")
+
+	// 🔥 Detect any failed steps for overall result
+	for id, st := range state.Snapshot() {
+		if st == StepFailed {
+			return fmt.Errorf("flow completed with failed step(s), e.g. %s", id)
+		}
+	}
+	return nil
 }
 
-
-
 // helper: check if all dependencies succeeded
-func allDepsSatisfied(node *dag.Node, s *StateManager) bool {
+func allDepsSatisfied(node *dag.Node, state *StateManager) bool {
 	for _, dep := range node.Dependencies {
-		if s.Get(dep.ID) != StepSuccess {
+		if state.Get(dep.ID) != StepSuccess {
 			return false
 		}
 	}
