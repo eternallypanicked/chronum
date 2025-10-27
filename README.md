@@ -29,20 +29,25 @@ It’s designed for **developer workflows** — CI/CD, data pipelines, build orc
 ---
 
 ## 📦 Project Structure
+
+```bash
 chronum/
 ├── cmd/
-│ └── test/ # Example entrypoint for testing flows
-├── engine/ # Execution engine, runner, state, executors
-├── parser/ # DAG + parser + YAML handler
-│ ├── dag.go
-│ ├── yaml/
-│ └── types/
+│   └── test/                 # Example entrypoint for testing flows
+├── engine/                   # Execution engine, runner, state, executors
+├── parser/                   # DAG + parser + YAML handler
+│   ├── dag.go
+│   ├── yaml/
+│   └── types/
 └── examples/
-└── chronum.yaml # Example workflow definition
+    └── chronum.yaml          # Example workflow definition
+```
+
+---
 
 ## 🧱 Example Workflow
 
---yaml
+```yaml
 name: deploy-api
 maxParallel: 3
 stopOnFail: true
@@ -70,13 +75,20 @@ steps:
 
   - name: deployed
     run: ./deploy.sh
+```
 
-🧰 Running a Flow
+---
+
+## 🧰 Running a Flow
+
+```bash
 go run ./cmd/test
+```
+---
 
+## 🧩 Example Output
 
-## Example Output
-
+```
 ✅ Parsed Chronum: deploy-api
 🚀 Running deploy-api (maxParallel=3, stopOnFail=true, retry=2)
 [build] Running...
@@ -97,30 +109,34 @@ go run ./cmd/test
 [deploy] complete
 
 ✅ Flow complete.
+```
 
-⚙️ Configuration Reference
-| Field          | Description                                         | Default |
-| -------------- | --------------------------------------------------- | ------- |
-| `name`         | Name of the flow                                    | —       |
-| `maxParallel`  | Maximum concurrent tasks                            | `1`     |
-| `stopOnFail`   | Halt the DAG on first failure                       | `false` |
-| `defaultRetry` | Number of retry attempts per step                   | `0`     |
-| `executor`     | Step executor (`shell`, `python`, `docker`, custom) | `shell` |
+---
 
+## ⚙️ Configuration Reference
 
-🔌 Extending Chronum
+| Field | Description | Default |
+|--------|--------------|----------|
+| `name` | Name of the flow | — |
+| `maxParallel` | Maximum concurrent tasks | `1` |
+| `stopOnFail` | Halt the DAG on first failure | `false` |
+| `defaultRetry` | Number of retry attempts per step | `0` |
+| `executor` | Step executor (`shell`, `python`, `docker`, custom) | `shell` |
+
+---
+
+## 🔌 Extending Chronum
 
 Chronum is fully extensible:
 
-    * Executors — implement the Executor interface (Execute(node *dag.Node) error)
+- **Executors** — implement the `Executor` interface (`Execute(node *dag.Node) error`)
+- **Parsers** — register new formats via `parser.Register("format", parserImpl)`
+- **Event Bus (WIP)** — connect your own event subscriber to stream real-time state changes
+- **Exporters (future)** — send run data to external systems (e.g., Prometheus, S3, Datadog)
 
-    * Parsers — register new formats via parser.Register("format", parserImpl)
+---
 
-    * Event Bus (WIP) — connect your own event subscriber to stream real-time state changes
-
-    * Exporters (future) — send run data to external systems (e.g., Prometheus, S3, Datadog)
-
-🧩 Roadmap
+## 🧩 Roadmap
 
 | Milestone     | Status     | Description                                     |
 | ------------- | ---------- | ----------------------------------------------- |
@@ -132,24 +148,24 @@ Chronum is fully extensible:
 | **OBS-002**   | 🧠 Planned  | Local dashboard for DAG visualization           |
 | **NET-001**   | 🧠 Planned  | Chronum Cloud sync & team mode                  |
 
-
-🧑‍💻 Philosophy
+---
+## 🧑‍💻 Philosophy
 
 Chronum’s guiding principles:
 
-    1. Local-first — your automation should work offline.
+1. **Local-first** — your automation should work offline.
+2. **Composable** — everything is a plugin or module.
+3. **Observable** — runs should be inspectable and replayable.
+4. **Deterministic** — same DAG, same result, every time.
 
-    2. Composable — everything is a plugin or module.
+---
 
-    3. Observable — runs should be inspectable and replayable.
+## 🧪 Status
 
-    4. Deterministic — same DAG, same result, every time.
-
-
-🧪 Status
-
-Chronum is in early development.
-Core engine features are implemented and tested.
+Chronum is in early development.  
+Core engine features are implemented and tested.  
 Next milestone: event bus + local dashboard.
 
 Contributions, discussions, and crazy ideas are welcome.
+
+---
