@@ -7,6 +7,8 @@ const (
     StepRunning StepStatus = "running"
     StepSuccess StepStatus = "success"
     StepFailed  StepStatus = "failed"
+	StepOK    StepStatus = StepSuccess
+	StepError StepStatus = "error"
 )
 
 type StepResult struct {
