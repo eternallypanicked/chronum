@@ -90,62 +90,6 @@ func (e *Engine) Run(graph *dag.DAG) error {
 	return nil
 }
 
-// Deprecated: RunParallel shouldn't be used; Use RunParallel with limit
-// func (e *Engine) RunParallel(graph *dag.DAG) error {
-// 	var mu sync.Mutex
-// 	wg := &sync.WaitGroup{}
-// 	inProgress := make(map[string]bool)
-
-// 	// Step 1: find all nodes with no dependencies
-// 	ready := []*dag.Node{}
-// 	for _, n := range graph.Nodes {
-// 		if len(n.Dependencies) == 0 {
-// 			ready = append(ready, n)
-// 		}
-// 	}
-
-// 	state := NewStateManager()
-// 	ctx := NewRunContext(nil, flow.Name)
-// 	runner := NewRunner(state, ctx, e.executors["shell"], e.bus)
-
-// 	// Step 2: run nodes recursively
-// 	var runNode func(*dag.Node)
-// 	runNode = func(node *dag.Node) {
-// 		mu.Lock()
-// 		if inProgress[node.ID] {
-// 			mu.Unlock()
-// 			return
-// 		}
-// 		inProgress[node.ID] = true
-// 		mu.Unlock()
-
-// 		wg.Add(1)
-// 		go func() {
-// 			defer wg.Done()
-// 			res := runner.RunNode(node)
-// 			if res.Status == StepFailed {
-// 				return // early exit if one fails
-// 			}
-
-// 			// Check dependents
-// 			for _, dep := range node.Dependents {
-// 				if allDepsSatisfied(dep, state) {
-// 					runNode(dep)
-// 				}
-// 			}
-// 		}()
-// 	}
-
-// 	// Step 3: start all roots
-// 	for _, node := range ready {
-// 		runNode(node)
-// 	}
-
-// 	wg.Wait()
-// 	fmt.Println("Parallel run complete")
-// 	return nil
-// }
-
 func (e *Engine) RunParallelWithLimit(graph *dag.DAG, flow *types.ChronumDefinition) error {
 	
 	maxParallel := flow.MaxParallel
