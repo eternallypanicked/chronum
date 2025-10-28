@@ -9,80 +9,129 @@ import (
 
 type Runner struct {
     State *StateManager
-    Ctx   *RunContext
+    ctx   *RunContext
     Exec  Executor
+	Emitter EventEmitter
 }
 
-func NewRunner(state *StateManager, ctx *RunContext, exec Executor) *Runner {
-    return &Runner{State: state, Ctx: ctx, Exec: exec}
+func NewRunner(state *StateManager, ctx *RunContext, exec Executor, emitter EventEmitter) *Runner {
+	return &Runner{
+		State:   state,
+		ctx:     ctx,
+		Exec:    exec,
+		Emitter: emitter,
+	}
 }
 
 func (r *Runner) RunNode(node *dag.Node) StepResult {
-    id := node.ID
-    r.State.Set(id, StepRunning)
-    fmt.Printf("[%s] Running...\n", id)
-
-    err := r.Exec.Execute(node)
-    if err != nil {
-        r.State.Set(id, StepFailed)
-        fmt.Printf("[%s] failed: %v\n", id, err)
-        return StepResult{ID: id, Status: StepFailed, Error: err}
-    }
-
-    r.State.Set(id, StepSuccess)
-    fmt.Printf("[%s] complete\n", id)
-    return StepResult{ID: id, Status: StepSuccess}
-}
-
-// RunNodeWithRetry executes a single DAG node with retry policy, exponential backoff,
-// and optional jitter to avoid retry storms.
-func (r *Runner) RunNodeWithRetry(node *dag.Node, ex Executor, retries int) StepResult {
-	
 	id := node.ID
 	r.State.Set(id, StepRunning)
 	fmt.Printf("[%s] Running...\n", id)
 
+	// Basic cancellation check
+	if r.ctx != nil && r.ctx.IsCancelled() {
+		r.State.Set(id, StepFailed)
+		return StepResult{ID: id, Status: StepFailed, Error: fmt.Errorf("cancelled")}
+	}
+
+	err := r.Exec.Execute(node)
+	if err != nil {
+		r.State.Set(id, StepFailed)
+		fmt.Printf("[%s] failed: %v\n", id, err)
+		return StepResult{ID: id, Status: StepFailed, Error: err}
+	}
+
+	r.State.Set(id, StepSuccess)
+	fmt.Printf("[%s] complete\n", id)
+	return StepResult{ID: id, Status: StepSuccess}
+}
+
+
+// RunNodeWithRetry executes a single DAG node with retry policy, exponential backoff,
+// and optional jitter to avoid retry storms.
+func (r *Runner) RunNodeWithRetry(node *dag.Node, ex Executor, retries int) StepResult {
+	id := node.ID
+	r.State.Set(id, StepRunning)
+
+	// emit start
+	if r.Emitter != nil {
+		r.Emitter.Emit(Event{
+			Type:      EventStepStart,
+			Timestamp: time.Now().UTC(),
+			FlowName:  r.ctx.FlowName,
+			StepName:  id,
+			Status:    StepRunning,
+			Attempt:   1,
+			MaxRetry:  retries + 1,
+		})
+	}
+
 	var lastErr error
-	delay := time.Second // initial backoff duration
+	delay := time.Second
 
 	for attempt := 1; attempt <= retries+1; attempt++ {
-		// respect context cancellation
-		if r.Ctx.IsCancelled() {
+		if r.ctx != nil && r.ctx.IsCancelled() {
 			r.State.Set(id, StepFailed)
-			fmt.Printf("[%s] cancelled before attempt %d\n", id, attempt)
+			if r.Emitter != nil {
+				r.Emitter.Emit(Event{
+					Type:      EventStepFail,
+					Timestamp: time.Now().UTC(),
+					FlowName:  r.ctx.FlowName,
+					StepName:  id,
+					Status:    StepError,
+					Attempt:   attempt,
+					MaxRetry:  retries + 1,
+					Error:     "cancelled",
+				})
+			}
 			return StepResult{ID: id, Status: StepFailed, Error: fmt.Errorf("cancelled")}
 		}
 
 		err := ex.Execute(node)
 		if err == nil {
 			r.State.Set(id, StepSuccess)
-			fmt.Printf("[%s] complete\n", id)
+			if r.Emitter != nil {
+				r.Emitter.Emit(Event{
+					Type:      EventStepSuccess,
+					Timestamp: time.Now().UTC(),
+					FlowName:  r.ctx.FlowName,
+					StepName:  id,
+					Status:    StepOK,
+					Attempt:   attempt,
+					MaxRetry:  retries + 1,
+				})
+			}
 			return StepResult{ID: id, Status: StepSuccess}
 		}
 
-		// record the failure
+		// record failure for this attempt
 		lastErr = err
-		fmt.Printf("[%s] failed (attempt %d/%d): %v\n", id, attempt, retries+1, err)
-
-		// if this was the final attempt, break
-		if attempt == retries+1 {
-			break
+		if r.Emitter != nil {
+			r.Emitter.Emit(Event{
+				Type:      EventStepFail,
+				Timestamp: time.Now().UTC(),
+				FlowName:  r.ctx.FlowName,
+				StepName:  id,
+				Status:    StepError,
+				Attempt:   attempt,
+				MaxRetry:  retries + 1,
+				Error:     err.Error(),
+			})
 		}
 
-		// --- exponential backoff with jitter ---
-		// random jitter between 0–250 ms
-		jitter := time.Duration(rand.Intn(250)) * time.Millisecond
-		fmt.Printf("[%s] retrying in %s (±%s jitter)\n", id, delay, jitter)
-
-		time.Sleep(delay + jitter)
-		delay *= 2 
-		if delay > 30*time.Second {
-			delay = 30 * time.Second 
+		if attempt < retries+1 {
+			// exponential backoff with jitter
+			jitter := time.Duration(rand.Intn(250)) * time.Millisecond
+			time.Sleep(delay + jitter)
+			delay *= 2
+			if delay > 30*time.Second {
+				delay = 30 * time.Second
+			}
 		}
 	}
 
+	// out of retries
 	r.State.Set(id, StepFailed)
-	fmt.Printf("[%s] failed after %d attempts\n", id, retries+1)
 	return StepResult{ID: id, Status: StepFailed, Error: lastErr}
 }
 

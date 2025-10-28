@@ -9,19 +9,50 @@ import (
 
 // Engine coordinates execution of DAG nodes using registered executors.
 type Engine struct {
+	mu        sync.RWMutex
 	executors map[string]Executor // executor registry
+	bus       *SafeEventBus
+	// a simple run registry to track running flows (optional introspection)
+	runsMu sync.RWMutex
+	runs   map[string]*RunContext
 }
 
 // New creates a new engine with no executors yet.
 func New() *Engine {
 	return &Engine{
 		executors: make(map[string]Executor),
+		bus:       NewEventBus(),
+		runs:      make(map[string]*RunContext),
 	}
 }
 
 // RegisterExecutor adds a new executor type to the engine.
 func (e *Engine) RegisterExecutor(name string, ex Executor) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.executors[name] = ex
+}
+
+func (e *Engine) getExecutor(name string) Executor {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.executors[name]
+}
+
+func (e *Engine) Bus() *SafeEventBus  {
+	return e.bus
+}
+
+func (e *Engine) registerRun(ctx *RunContext) {
+	e.runsMu.Lock()
+	defer e.runsMu.Unlock()
+	e.runs[ctx.ID] = ctx
+}
+
+func (e *Engine) unregisterRun(id string) {
+	e.runsMu.Lock()
+	defer e.runsMu.Unlock()
+	delete(e.runs, id)
 }
 
 // Run executes the DAG in topological order (parallel when possible).
@@ -38,9 +69,8 @@ func (e *Engine) Run(graph *dag.DAG) error {
 		// Simple: every node runs sequentially for now
 		fmt.Printf("Running step: %s\n", node.ID)
 
-		// Choose an executor type (for now, assume "shell")
-		ex, ok := e.executors["shell"]
-		if !ok {
+		ex := e.getExecutor("shell")
+		if ex == nil {
 			return fmt.Errorf("no executor registered for 'shell'")
 		}
 
@@ -60,63 +90,8 @@ func (e *Engine) Run(graph *dag.DAG) error {
 	return nil
 }
 
-func (e *Engine) RunParallel(graph *dag.DAG) error {
-	var mu sync.Mutex
-	wg := &sync.WaitGroup{}
-	inProgress := make(map[string]bool)
-
-	// Step 1: find all nodes with no dependencies
-	ready := []*dag.Node{}
-	for _, n := range graph.Nodes {
-		if len(n.Dependencies) == 0 {
-			ready = append(ready, n)
-		}
-	}
-
-	state := NewStateManager()
-	ctx := NewRunContext(map[string]string{"RUN_MODE": "parallel"})
-	runner := NewRunner(state, ctx, e.executors["shell"])
-
-	// Step 2: run nodes recursively
-	var runNode func(*dag.Node)
-	runNode = func(node *dag.Node) {
-		mu.Lock()
-		if inProgress[node.ID] {
-			mu.Unlock()
-			return
-		}
-		inProgress[node.ID] = true
-		mu.Unlock()
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			res := runner.RunNode(node)
-			if res.Status == StepFailed {
-				return // early exit if one fails
-			}
-
-			// Check dependents
-			for _, dep := range node.Dependents {
-				if allDepsSatisfied(dep, state) {
-					runNode(dep)
-				}
-			}
-		}()
-	}
-
-	// Step 3: start all roots
-	for _, node := range ready {
-		runNode(node)
-	}
-
-	wg.Wait()
-	fmt.Println("Parallel run complete")
-	return nil
-}
-
 func (e *Engine) RunParallelWithLimit(graph *dag.DAG, flow *types.ChronumDefinition) error {
-
+	
 	maxParallel := flow.MaxParallel
 	if maxParallel < 1 {
 		maxParallel = 1
@@ -128,11 +103,30 @@ func (e *Engine) RunParallelWithLimit(graph *dag.DAG, flow *types.ChronumDefinit
 	inProgress := make(map[string]bool)
 
 	state := NewStateManager()
-	ctx := NewRunContext(nil)
-	runner := NewRunner(state, ctx, e.executors["shell"])
+	ctx := NewRunContext(nil, flow.Name)
+	// register run for observability
+	e.registerRun(ctx)
+	defer e.unregisterRun(ctx.ID)
+
+	// choose default executor (shell) but runner will use per-node executor as needed
+	defaultExec := e.getExecutor("shell")
+	runner := NewRunner(state, ctx, defaultExec, e.Bus())
 
 	fmt.Printf("\nRunning %s (maxParallel=%d, stopOnFail=%v, retry=%d)\n",
 		flow.Name, maxParallel, flow.StopOnFail, flow.DefaultRetry)
+
+	// gather root nodes
+	ready := []*dag.Node{}
+	for _, n := range graph.Nodes {
+		if len(n.Dependencies) == 0 {
+			ready = append(ready, n)
+		}
+	}
+
+	// if no nodes, return immediately
+	if len(ready) == 0 {
+		return nil
+	}
 
 	var runNode func(*dag.Node)
 	runNode = func(node *dag.Node) {
@@ -147,37 +141,38 @@ func (e *Engine) RunParallelWithLimit(graph *dag.DAG, flow *types.ChronumDefinit
 		sem <- struct{}{}
 		wg.Add(1)
 
-		go func() {
+		go func(n *dag.Node) {
 			defer func() {
 				<-sem
 				wg.Done()
 			}()
 
+			// check cancellation early
 			if ctx.IsCancelled() {
 				return
 			}
 
-			step := node.Step
-			execType := step.Executor
-			if execType == "" {
-				execType = "shell"
+			step := n.Step
+			execType := "shell"
+			if step != nil && step.Executor != "" {
+				execType = step.Executor
 			}
 
-			ex, ok := e.executors[execType]
-			if !ok {
-				fmt.Printf("No executor registered for '%s', using shell\n", execType)
-				ex = e.executors["shell"]
+			ex := e.getExecutor(execType)
+			if ex == nil {
+				// fallback to shell executor if missing
+				ex = defaultExec
 			}
 
 			// Execute with retry logic
-			res := runner.RunNodeWithRetry(node, ex, flow.DefaultRetry)
+			res := runner.RunNodeWithRetry(n, ex, flow.DefaultRetry)
 
 			// Record step result
 			if res.Status == StepFailed {
-				state.Set(node.ID, StepFailed)
-				fmt.Printf("Step '%s' failed.\n", node.ID)
+				state.Set(n.ID, StepFailed)
+				fmt.Printf("Step '%s' failed.\n", n.ID)
 			} else {
-				state.Set(node.ID, StepSuccess)
+				state.Set(n.ID, StepSuccess)
 			}
 
 			// Stop all if configured and a failure occurred
@@ -188,7 +183,7 @@ func (e *Engine) RunParallelWithLimit(graph *dag.DAG, flow *types.ChronumDefinit
 			}
 
 			// Launch dependents if all dependencies succeeded
-			for _, dep := range node.Dependents {
+			for _, dep := range n.Dependents {
 				if ctx.IsCancelled() {
 					return
 				}
@@ -196,14 +191,12 @@ func (e *Engine) RunParallelWithLimit(graph *dag.DAG, flow *types.ChronumDefinit
 					runNode(dep)
 				}
 			}
-		}()
+		}(node)
 	}
 
-	// --- Start all root nodes (no dependencies) ---
-	for _, node := range graph.Nodes {
-		if len(node.Dependencies) == 0 {
-			runNode(node)
-		}
+	// start all roots
+	for _, node := range ready {
+		runNode(node)
 	}
 
 	wg.Wait()
@@ -215,6 +208,7 @@ func (e *Engine) RunParallelWithLimit(graph *dag.DAG, flow *types.ChronumDefinit
 			return fmt.Errorf("flow completed with failed step(s), e.g. %s", id)
 		}
 	}
+
 	return nil
 }
 
